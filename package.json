@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@codahq/packs-sdk": "^1.9.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.4"
+  },
+  "scripts": {
+    "build": "tsc"
+  }
+}

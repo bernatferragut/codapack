@@ -100,61 +100,52 @@ pack.addSyncTable({
       coda.makeParameter({
         type: coda.ParameterType.String,
         name: "eventId",
-        description: "Event ID from Eventbrite URL (e.g., '1234567890')",
+        description: "Event ID or URL from Eventbrite (e.g., '1234567890' or full URL)",
       }),
     ],
     execute: async function ([eventId], context: coda.SyncExecutionContext) {
-      // Validate eventId to ensure it's a numeric string
+      // Validate eventId to ensure it contains numeric characters.
+      // If a full URL is provided, attempt to extract the numeric event ID.
       if (!/^\d+$/.test(eventId)) {
-        throw new coda.UserVisibleError("Event ID must be a numeric string (e.g., '1234567890').");
-      }
-
-      const baseUrl = `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`;
-      const attendees = [];
-      let continuation;
-      let hasMore = true;
-
-      while (hasMore) {
-        let url = baseUrl;
-        if (continuation) {
-          url += `?continuation=${encodeURIComponent(continuation)}`;
-        }
-
-        try {
-          const response = await context.fetcher.fetch<AttendeesResponse>({
-            method: "GET",
-            url: url,
-          });
-
-          const data = response.body;
-          if (!data.pagination || !Array.isArray(data.attendees)) {
-            throw new coda.UserVisibleError("Invalid API response format.");
-          }
-
-          attendees.push(...data.attendees);
-          hasMore = data.pagination.has_more_items;
-          continuation = data.pagination.continuation;
-        } catch (error) {
-          if (error instanceof coda.StatusCodeError) {
-            throw new coda.UserVisibleError(`Eventbrite API error ${error.statusCode}: ${error.message}`);
-          }
-          throw new coda.UserVisibleError(`Error fetching registrations: ${error.message || 'Unknown error'}`);
+        const match = eventId.match(/(\d+)/);
+        if (match) {
+          eventId = match[1];
+        } else {
+          throw new coda.UserVisibleError("Event ID must be a numeric string or contain a numeric ID.");
         }
       }
-
+      // Build the URL using the provided eventId and any continuation token
+      let url = `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`;
+      if (context.sync.continuation) {
+        url += `?continuation=${encodeURIComponent(context.sync.continuation)}`;
+      }
+      // Fetch one page of results
+      const response = await context.fetcher.fetch<AttendeesResponse>({
+        method: "GET",
+        url: url,
+      });
+      const data = response.body;
+      if (!data.pagination || !Array.isArray(data.attendees)) {
+        throw new coda.UserVisibleError("Invalid API response format.");
+      }
+      // Map the attendees to the table schema
+      const attendees = data.attendees.map(attendee => ({
+        id: attendee.id,
+        name: [attendee.profile.first_name, attendee.profile.last_name]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || "Unnamed Attendee",
+        email: attendee.profile.email,
+        eventId: attendee.event_id,
+        status: attendee.status,
+        registered: new Date(attendee.created).toISOString(),
+        ticket: attendee.ticket_class_name,
+      }));
       return {
-        result: attendees.map(attendee => ({
-          id: attendee.id,
-          name: [attendee.profile.first_name, attendee.profile.last_name]
-            .filter(Boolean)
-            .join(" ")
-            .trim() || "Unnamed Attendee",
-          email: attendee.profile.email,
-          eventId: attendee.event_id,
-          status: attendee.status,
-          registered: new Date(attendee.created).toISOString(),
-          ticket: attendee.ticket_class_name,
-        })),
+        result: attendees,
+        continuation: data.pagination.has_more_items && data.pagination.continuation
+          ? data.pagination.continuation
+          : undefined,
       };
     },
   },

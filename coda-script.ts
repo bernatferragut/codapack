@@ -27,6 +27,50 @@ interface UserResponse {
   emails: { email: string }[];
 }
 
+// ## Registration Schema
+const registrationSchema = coda.makeObjectSchema({
+  properties: {
+    id: { type: coda.ValueType.String, description: "Attendee ID" },
+    name: { type: coda.ValueType.String, description: "Attendee Name" },
+    email: {
+      type: coda.ValueType.String,
+      codaType: coda.ValueHintType.Email,
+      description: "Attendee Email",
+    },
+    eventId: {
+      type: coda.ValueType.String,
+      description: "Eventbrite Event ID",
+    },
+    status: {
+      type: coda.ValueType.String,
+      description: "Registration Status (Attending, Cancelled, etc.)",
+    },
+    registered: {
+      type: coda.ValueType.String, // ISO Date String
+      codaType: coda.ValueHintType.DateTime,
+      description: "Registration Date and Time",
+    },
+    ticket: {
+      type: coda.ValueType.String,
+      description: "Ticket Class Name",
+    },
+  },
+  displayProperty: "name",
+  idProperty: "id",
+  featuredProperties: ["email", "status", "registered"],
+});
+
+// Define our Registration type for mapping rows.
+type Registration = {
+  id: string;
+  name: string;
+  email: string;
+  eventId: string;
+  status: string;
+  registered: string;
+  ticket: string;
+};
+
 // ## Pack Configuration
 export const pack = coda.newPack();
 
@@ -49,9 +93,13 @@ pack.setUserAuthentication({
     } catch (error) {
       console.error("Error fetching connection name:", error);
       if (error instanceof coda.StatusCodeError) {
-        throw new coda.UserVisibleError(`Eventbrite API error ${error.statusCode}: ${error.message}`);
+        throw new coda.UserVisibleError(
+          `Eventbrite API error ${error.statusCode}: ${error.message}`
+        );
       }
-      throw new coda.UserVisibleError(`Failed to connect to Eventbrite: ${error.message || 'Unknown error'}`);
+      throw new coda.UserVisibleError(
+        `Failed to connect to Eventbrite: ${error.message || "Unknown error"}`
+      );
     }
   },
 });
@@ -62,37 +110,7 @@ pack.addNetworkDomain("eventbriteapi.com");
 pack.addSyncTable({
   name: "Registrations",
   identityName: "Registration",
-  schema: coda.makeObjectSchema({
-    properties: {
-      id: { type: coda.ValueType.String, description: "Attendee ID" },
-      name: { type: coda.ValueType.String, description: "Attendee Name" },
-      email: {
-        type: coda.ValueType.String,
-        codaType: coda.ValueHintType.Email,
-        description: "Attendee Email",
-      },
-      eventId: {
-        type: coda.ValueType.String,
-        description: "Eventbrite Event ID",
-      },
-      status: {
-        type: coda.ValueType.String,
-        description: "Registration Status (Attending, Cancelled, etc.)",
-      },
-      registered: {
-        type: coda.ValueType.String, // ISO Date String
-        codaType: coda.ValueHintType.DateTime,
-        description: "Registration Date and Time",
-      },
-      ticket: {
-        type: coda.ValueType.String,
-        description: "Ticket Class Name",
-      },
-    },
-    displayProperty: "name",
-    idProperty: "id",
-    featuredProperties: ["email", "status", "registered"],
-  }),
+  schema: registrationSchema,
   formula: {
     name: "SyncRegistrations",
     description: "Fetch Eventbrite registrations for a given event.",
@@ -100,26 +118,35 @@ pack.addSyncTable({
       coda.makeParameter({
         type: coda.ParameterType.String,
         name: "eventId",
-        description: "Event ID or URL from Eventbrite (e.g., '1234567890' or full URL)",
+        description:
+          "Event ID or URL from Eventbrite (e.g., '1234567890' or full URL)",
       }),
     ],
-    execute: async function ([eventId], context: coda.SyncExecutionContext) {
-      // Validate eventId to ensure it contains numeric characters.
-      // If a full URL is provided, attempt to extract the numeric event ID.
+    execute: async function (
+      [eventId]: [string],
+      context: coda.SyncExecutionContext
+    ): Promise<coda.SyncFormulaResult<any, string, typeof registrationSchema>> {
+      // Debug log the received eventId.
+      console.log("Received eventId:", eventId);
+      
+      // Validate eventId: if not a pure numeric string, attempt to extract the numeric ID.
       if (!/^\d+$/.test(eventId)) {
         const match = eventId.match(/(\d+)/);
         if (match) {
           eventId = match[1];
+          console.log("Extracted numeric eventId:", eventId);
         } else {
-          throw new coda.UserVisibleError("Event ID must be a numeric string or contain a numeric ID.");
+          throw new coda.UserVisibleError(
+            `Invalid Event ID: "${eventId}". Ensure it is a numeric string or a valid Eventbrite event URL containing the event's numeric ID.`
+          );
         }
       }
-      // Build the URL using the provided eventId and any continuation token
+      // Build the URL using the eventId and any continuation token.
       let url = `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`;
       if (context.sync.continuation) {
-        url += `?continuation=${encodeURIComponent(context.sync.continuation)}`;
+        url += `?continuation=${encodeURIComponent(String(context.sync.continuation))}`;
       }
-      // Fetch one page of results
+      // Fetch one page of results.
       const response = await context.fetcher.fetch<AttendeesResponse>({
         method: "GET",
         url: url,
@@ -128,13 +155,14 @@ pack.addSyncTable({
       if (!data.pagination || !Array.isArray(data.attendees)) {
         throw new coda.UserVisibleError("Invalid API response format.");
       }
-      // Map the attendees to the table schema
-      const attendees = data.attendees.map(attendee => ({
+      // Map the API data to our Registration rows.
+      const attendees: Registration[] = data.attendees.map((attendee) => ({
         id: attendee.id,
-        name: [attendee.profile.first_name, attendee.profile.last_name]
-          .filter(Boolean)
-          .join(" ")
-          .trim() || "Unnamed Attendee",
+        name:
+          [attendee.profile.first_name, attendee.profile.last_name]
+            .filter(Boolean)
+            .join(" ")
+            .trim() || "Unnamed Attendee",
         email: attendee.profile.email,
         eventId: attendee.event_id,
         status: attendee.status,
@@ -143,9 +171,10 @@ pack.addSyncTable({
       }));
       return {
         result: attendees,
-        continuation: data.pagination.has_more_items && data.pagination.continuation
-          ? data.pagination.continuation
-          : undefined,
+        continuation:
+          data.pagination.has_more_items && data.pagination.continuation
+            ? (data.pagination.continuation as any)
+            : null,
       };
     },
   },
@@ -172,9 +201,11 @@ pack.addFormula({
     } catch (error) {
       console.error("Error testing connection:", error);
       if (error instanceof coda.StatusCodeError) {
-        throw new coda.UserVisibleError(`Eventbrite API error ${error.statusCode}: ${error.message}`);
+        throw new coda.UserVisibleError(
+          `Eventbrite API error ${error.statusCode}: ${error.message}`
+        );
       }
-      throw new coda.UserVisibleError(`Connection test failed: ${error.message || 'Unknown error'}`);
+      throw new coda.UserVisibleError(`Connection test failed: ${error.message || "Unknown error"}`);
     }
   },
 });

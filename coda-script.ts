@@ -1,5 +1,40 @@
 import * as coda from "@codahq/packs-sdk";
 
+// Initialize the pack
+export const pack = coda.newPack();
+
+// ## Authentication Setup
+pack.setUserAuthentication({
+  type: coda.AuthenticationType.OAuth2,
+  authorizationUrl: "https://www.eventbrite.com/oauth/authorize",
+  tokenUrl: "https://www.eventbrite.com/oauth/token",
+  scopes: ["event_attendees:read", "user:read"],
+  additionalParams: { response_type: "code" },
+  getConnectionName: async (context: coda.ExecutionContext): Promise<string> => {
+    try {
+      console.log("Fetching connection name...");
+      const response = await context.fetcher.fetch<UserResponse>({
+        method: "GET",
+        url: "https://www.eventbriteapi.com/v3/users/me/",
+      });
+      console.log("Connection name fetched successfully:", response.body.name);
+      return response.body.name || "Eventbrite Account";
+    } catch (error) {
+      console.error("Error fetching connection name:", error);
+      if (error instanceof coda.StatusCodeError) {
+        throw new coda.UserVisibleError(
+          `Eventbrite API error ${error.statusCode}: ${error.message}`
+        );
+      }
+      throw new coda.UserVisibleError(
+        `Failed to connect to Eventbrite: ${error.message || "Unknown error"}`
+      );
+    }
+  },
+});
+
+pack.addNetworkDomain("eventbriteapi.com");
+
 // ## Eventbrite API Types
 interface EventbriteAttendee {
   id: string;
@@ -108,41 +143,6 @@ const eventSchema = coda.makeObjectSchema({
   idProperty: "id",
 });
 
-// ## Pack Configuration
-export const pack = coda.newPack();
-
-// ## Authentication Setup
-pack.setUserAuthentication({
-  type: coda.AuthenticationType.OAuth2,
-  authorizationUrl: "https://www.eventbrite.com/oauth/authorize",
-  tokenUrl: "https://www.eventbrite.com/oauth/token",
-  scopes: ["event_attendees:read", "user:read"],
-  additionalParams: { response_type: "code" },
-  getConnectionName: async (context: coda.ExecutionContext): Promise<string> => {
-    try {
-      console.log("Fetching connection name...");
-      const response = await context.fetcher.fetch<UserResponse>({
-        method: "GET",
-        url: "https://www.eventbriteapi.com/v3/users/me/",
-      });
-      console.log("Connection name fetched successfully:", response.body.name);
-      return response.body.name || "Eventbrite Account";
-    } catch (error) {
-      console.error("Error fetching connection name:", error);
-      if (error instanceof coda.StatusCodeError) {
-        throw new coda.UserVisibleError(
-          `Eventbrite API error ${error.statusCode}: ${error.message}`
-        );
-      }
-      throw new coda.UserVisibleError(
-        `Failed to connect to Eventbrite: ${error.message || "Unknown error"}`
-      );
-    }
-  },
-});
-
-pack.addNetworkDomain("eventbriteapi.com");
-
 // ## Events Sync Table
 pack.addSyncTable({
   name: "Events",
@@ -179,8 +179,8 @@ pack.addSyncTable({
         result: events,
         continuation:
           data.pagination.has_more_items && data.pagination.continuation
-            ? data.pagination.continuation
-            : null,
+            ? (data.pagination.continuation as any)
+            : undefined,
       };
     },
   },
@@ -207,15 +207,15 @@ pack.addSyncTable({
       context: coda.SyncExecutionContext
     ): Promise<coda.SyncFormulaResult<any, string, typeof registrationSchema>> {
       console.log("Received eventId:", eventId);
-      
+
       // Ensure a non-empty eventId was provided.
       if (!eventId || eventId.trim() === "") {
         throw new coda.UserVisibleError(
           "Event ID is empty. Please provide a valid numeric Event ID or a full Eventbrite event URL containing the event's numeric ID."
         );
       }
-      
-      // If eventId is not pure numeric, attempt to extract it from a URL.
+
+      // If eventId is not purely numeric, attempt to extract it from a URL.
       if (!/^\d+$/.test(eventId)) {
         const match = eventId.match(/eid=(\d+)/);
         if (match) {
@@ -227,12 +227,12 @@ pack.addSyncTable({
           );
         }
       }
-      
+
       let url = `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`;
       if (context.sync.continuation) {
         url += `?continuation=${encodeURIComponent(String(context.sync.continuation))}`;
       }
-      
+
       const response = await context.fetcher.fetch<AttendeesResponse>({
         method: "GET",
         url: url,
@@ -241,7 +241,7 @@ pack.addSyncTable({
       if (!data.pagination || !Array.isArray(data.attendees)) {
         throw new coda.UserVisibleError("Invalid API response format.");
       }
-      
+
       const attendees: Registration[] = data.attendees.map((attendee) => ({
         id: attendee.id,
         name:
@@ -255,13 +255,13 @@ pack.addSyncTable({
         registered: new Date(attendee.created).toISOString(),
         ticket: attendee.ticket_class_name,
       }));
-      
+
       return {
         result: attendees,
         continuation:
           data.pagination.has_more_items && data.pagination.continuation
-            ? data.pagination.continuation
-            : null,
+            ? (data.pagination.continuation as any)
+            : undefined,
       };
     },
   },

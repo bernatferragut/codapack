@@ -1,0 +1,19 @@
+{
+  "name": "7.codascript",
+  "version": "1.0.0",
+  "description": "Typescript plugin to connect the Eventbrite Workshop inscriptions to the CODA App.",
+  "main": "coda-script.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bernatferragut/codapack.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/bernatferragut/codapack/issues"
+  },
+  "homepage": "https://github.com/bernatferragut/codapack#readme"
+}
